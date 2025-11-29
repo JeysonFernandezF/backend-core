@@ -1,0 +1,130 @@
+version: '3.8'
+
+services:
+  # Aplicación Laravel
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: coresafe_app_dev
+    restart: unless-stopped
+    working_dir: /var/www/html
+    volumes:
+      - .:/var/www/html
+      - ./docker/php/dev/php.ini:/usr/local/etc/php/conf.d/custom.ini
+    networks:
+      - coresafe-network
+    depends_on:
+      - mysql
+      - redis
+    environment:
+      - APP_ENV=local
+      - APP_DEBUG=true
+      - DB_CONNECTION=mysql
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_DATABASE=coresafe
+      - DB_USERNAME=coresafe_user
+      - DB_PASSWORD=coresafe_password
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - QUEUE_CONNECTION=database
+    ports:
+      - "8007:8000"
+
+  # Worker de colas para desarrollo
+  queue:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: coresafe_queue_dev
+    restart: unless-stopped
+    working_dir: /var/www/html
+    volumes:
+      - .:/var/www/html
+    networks:
+      - coresafe-network
+    depends_on:
+      - mysql
+      - redis
+      - app
+    environment:
+      - APP_ENV=local
+      - APP_DEBUG=true
+      - DB_CONNECTION=mysql
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_DATABASE=coresafe
+      - DB_USERNAME=coresafe_user
+      - DB_PASSWORD=coresafe_password
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - QUEUE_CONNECTION=database
+    command: php artisan queue:work --tries=3 --timeout=90 --verbose
+
+  # Base de datos MySQL
+  mysql:
+    image: mysql:8.0
+    container_name: coresafe_mysql_dev
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: coresafe
+      MYSQL_USER: coresafe_user
+      MYSQL_PASSWORD: coresafe_password
+      MYSQL_ROOT_PASSWORD: root_password
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./docker/mysql/my.cnf:/etc/mysql/conf.d/custom.cnf
+    ports:
+      - "3307:3306"
+    networks:
+      - coresafe-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-proot_password"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis para cache y queues
+  redis:
+    image: redis:7-alpine
+    container_name: coresafe_redis_dev
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - coresafe-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # Nginx para desarrollo (opcional, descomentar si prefieres usar nginx en lugar de artisan serve)
+  # Para API REST headless, artisan serve es suficiente
+  # nginx:
+  #   image: nginx:alpine
+  #   container_name: coresafe_nginx_dev
+  #   restart: unless-stopped
+  #   ports:
+  #     - "80:80"
+  #   volumes:
+  #     - .:/var/www/html
+  #     - ./docker/nginx/dev/nginx.conf:/etc/nginx/conf.d/default.conf
+  #   networks:
+  #     - coresafe-network
+  #   depends_on:
+  #     - app
+  #   profiles:
+  #     - dev-nginx
+
+networks:
+  coresafe-network:
+    driver: bridge
+
+volumes:
+  mysql_data:
+  redis_data:
+

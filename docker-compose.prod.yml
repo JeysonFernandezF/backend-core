@@ -1,0 +1,191 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: coresafe_app_prod
+    restart: always
+    working_dir: /var/www/html
+    volumes:
+      - ./storage:/var/www/html/storage
+      - ./bootstrap/cache:/var/www/html/bootstrap/cache
+    networks:
+      - coresafe-network
+    depends_on:
+      - mysql
+      - redis
+    environment:
+      - APP_ENV=production
+      - APP_DEBUG=false
+      - DB_CONNECTION=mysql
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_DATABASE=${DB_DATABASE}
+      - DB_USERNAME=${DB_USERNAME}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - QUEUE_CONNECTION=redis
+    env_file:
+      - .env.production
+    command: >
+      sh -c "
+        php artisan config:cache &&
+        php artisan route:cache &&
+        php artisan migrate --force &&
+        php-fpm
+      "
+
+
+  nginx:
+    image: nginx:alpine
+    container_name: coresafe_nginx_prod
+    restart: always
+    ports:
+      - "8080:80"  
+    volumes:
+      - ./docker/nginx/prod/nginx.conf:/etc/nginx/conf.d/default.conf
+      - ./public:/var/www/html/public
+      - ./storage:/var/www/html/storage
+      - ./docker/nginx/prod/ssl:/etc/nginx/ssl
+    networks:
+      - coresafe-network
+    depends_on:
+      - app
+
+
+  queue:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: coresafe_queue_prod
+    restart: always
+    working_dir: /var/www/html
+    volumes:
+      - ./storage:/var/www/html/storage
+      - ./bootstrap/cache:/var/www/html/bootstrap/cache
+    networks:
+      - coresafe-network
+    depends_on:
+      - mysql
+      - redis
+      - app
+    environment:
+      - APP_ENV=production
+      - APP_DEBUG=false
+      - DB_CONNECTION=mysql
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_DATABASE=${DB_DATABASE}
+      - DB_USERNAME=${DB_USERNAME}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - QUEUE_CONNECTION=redis
+    env_file:
+      - .env.production
+    command: php artisan queue:work redis --tries=3 --timeout=90 --max-jobs=1000 --max-time=3600
+
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: coresafe_scheduler_prod
+    restart: always
+    working_dir: /var/www/html
+    volumes:
+      - ./storage:/var/www/html/storage
+      - ./bootstrap/cache:/var/www/html/bootstrap/cache
+    networks:
+      - coresafe-network
+    depends_on:
+      - mysql
+      - redis
+      - app
+    environment:
+      - APP_ENV=production
+      - APP_DEBUG=false
+      - DB_CONNECTION=mysql
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_DATABASE=${DB_DATABASE}
+      - DB_USERNAME=${DB_USERNAME}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    env_file:
+      - .env.production
+    command: >
+      sh -c "
+        while true; do
+          php artisan schedule:run --verbose --no-interaction &
+          sleep 60
+        done
+      "
+
+
+  mysql:
+    image: mysql:8.0
+    container_name: coresafe_mysql_prod
+    restart: always
+    environment:
+      MYSQL_DATABASE: ${DB_DATABASE}
+      MYSQL_USER: ${DB_USERNAME}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./docker/mysql/prod/my.cnf:/etc/mysql/conf.d/custom.cnf
+      - ./docker/mysql/backups:/backups
+    networks:
+      - coresafe-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+
+  redis:
+    image: redis:7-alpine
+    container_name: coresafe_redis_prod
+    restart: always
+    command: >
+      sh -c "
+        if [ -n \"$$REDIS_PASSWORD\" ]; then
+          redis-server --appendonly yes --requirepass $$REDIS_PASSWORD /usr/local/etc/redis/redis.conf
+        else
+          redis-server --appendonly yes /usr/local/etc/redis/redis.conf
+        fi
+      "
+    volumes:
+      - redis_data:/data
+      - ./docker/redis/redis.conf:/usr/local/etc/redis/redis.conf
+    networks:
+      - coresafe-network
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    healthcheck:
+      test: >
+        sh -c "
+          if [ -n \"$$REDIS_PASSWORD\" ]; then
+            redis-cli -a $$REDIS_PASSWORD ping
+          else
+            redis-cli ping
+          fi
+        "
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+networks:
+  coresafe-network:
+    driver: bridge
+
+volumes:
+  mysql_data:
+  redis_data:
+
